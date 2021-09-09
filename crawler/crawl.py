@@ -5,7 +5,6 @@ import pandas as pd
 
 
 class CCGPCrawler:
-    MAIN_PAGE = 'http://ccgp-shaanxi.gov.cn/notice/list.do?noticetype=5&index=5&province=province'
     HEADER = {
         'Accept': 'text/html, */*; q=0.01', 'X-Requested-With': 'XMLHttpRequest',
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/93.0.4577.63 Safari/537.36',
@@ -13,12 +12,15 @@ class CCGPCrawler:
         'Origin': 'http://ccgp-shaanxi.gov.cn',
         'Referer': 'http://ccgp-shaanxi.gov.cn/notice/list.do?noticetype=5&index=5&province=province',
         'Accept-Encoding': 'gzip, deflate', 'Accept-Language': 'zh-CN,zh;q=0.9',
-        'Cookie': 'JSESSIONID=F9522ECDFCC0F7CE042B76F0BA6422ED; HasLoaded=true'
+        'Cookie': 'JSESSIONID=ECF24CAD475B0D9665E27E54A8FF20D2; HasLoaded=true'
     }
 
     URL_REX = re.compile(f'href="(.*?)" target="_blank"')
     NOTICE_HEADER_REX = re.compile('<h1 class="content-tit">(.*?)</h1>')
-    NOTICE_DETAIL_REX = re.compile('九、凡对本次公告内容提出询问，请按以下方式联系。(.*?)<p class="num">十、附件：</p>', re.DOTALL)
+    SUPPLIER_REX = re.compile('成交供应商 ：(.*?) </p>')
+    ADDRESS_REX = re.compile('地址 ：(.*?) </p>')
+    CONTACTS_REX = re.compile('联系人 ：(.*?) </p>')
+    TEL_REX = re.compile('联系电话 ：(.*?) </p>')
 
     def __init__(self, start_date, end_date, region_id):
         self._session = None
@@ -35,7 +37,7 @@ class CCGPCrawler:
         return self._session
 
     def _fetch_one_page_notice(self, page_num=None):
-        time.sleep(.3)
+        # time.sleep(.3)
         return self.session.post(
             'http://ccgp-shaanxi.gov.cn/notice/noticeaframe.do?noticetype=5&isgovertment=',
             headers=self.HEADER,
@@ -58,7 +60,7 @@ class CCGPCrawler:
             "parameters['regionguid']": self._region_id,
         }
         if page_num:
-            post_data.update({'page.pageNum:': page_num})
+            post_data.update({'page.pageNum': page_num})
         return post_data
 
     def _fetch_pages(self):
@@ -66,53 +68,36 @@ class CCGPCrawler:
         max_page_num = self._get_notice_pages()
         for page_num in range(1, max_page_num+1):
             one_notice_page_resp = self._fetch_one_page_notice(page_num)
-            print(f'visit page: {page_num}')
             self._parse_notice_url(one_notice_page_resp)
-        for notice_url in self._notice_urls:
-            print(f'parsing {notice_url}')
+        print(f'find notices: {len(self._notice_urls)}')
+        for index, notice_url in enumerate(self._notice_urls):
+            print(f'left: {len(self._notice_urls)-index}; parsing {notice_url}')
             notice_detail_resp = self.session.get(notice_url)
-            time.sleep(.3)
-            try:
-                notice_detail = self._parse_notice_detail(notice_detail_resp)
-                notice_detail.append(notice_url)
-                notices.append(notice_detail)
-            except:
-                with open('error.log', 'a+')as f:
-                    f.write(notice_url+'\n')
+            # time.sleep(.3)
+            notice_detail = self._parse_notice_detail(notice_detail_resp)
+            notice_detail.append(notice_url)
+            notices.append(notice_detail)
         return notices
 
     def _parse_notice_url(self, resp):
         """解析每一页中的招标信息链接"""
-        for notice_url in set(self.URL_REX.findall(resp.text)):
+        for notice_url in self.URL_REX.findall(resp.text):
             if 'noticeguid' in notice_url:
                 self._notice_urls.add(notice_url)
 
     def _parse_notice_detail(self, resp):
-        """解析详细的招标信息"""
-        notice_title = self.NOTICE_HEADER_REX.findall(resp.text)[0]
-        notice = [notice_title]
-        notice_detail = self.NOTICE_DETAIL_REX.findall(resp.text)[0].replace('<p>', '').replace('</p>', '')
-        purchaser, other = notice_detail.split('2、项目联系方式：')
-        # purchaser
-        for i in purchaser.strip().strip('1、').split('\n'):
-            notice.append(i.split('：')[-1].strip())
-
-        project, proxy = other.split('3、采购代理机构：')
-        # project
-        for i in project.strip().split('\n'):
-            notice.append(i.split('：')[-1].strip())
-        # proxy
-        for i in proxy.strip().split('\n'):
-            notice.append(i.split('：')[-1].strip())
-
+        """解析详细的中标信息"""
+        notice = []
+        for ptn in (self.NOTICE_HEADER_REX, self.SUPPLIER_REX, self.ADDRESS_REX, self.CONTACTS_REX, self.TEL_REX):
+            notice.append('\n'.join(ptn.findall(resp.text)).strip())
         return notice
 
     def run(self):
         notices = self._fetch_pages()
-        df = pd.DataFrame(data=notices, columns=['标题', '采购人信息', '采购联系人', '采购联系地址', '采购联系电话', '项目联系人', '项目电话', '项目传真', '采购代理机构名称', '采购代理机构地址', '采购代理联系方式', '招标链接'])
-        df.to_excel('招标信息.xlsx', index=False, encoding='utf-8')
+        df = pd.DataFrame(data=notices, columns=['标题', '供应商', '供应商地址', '联系人', '联系方式', '中标链接'])
+        df.to_excel('中标信息.xlsx', index=False, encoding='utf-8')
 
 
 if __name__ == '__main__':
-    c = CCGPCrawler('2010-07-01', '2020-12-31', '610001')
+    c = CCGPCrawler('2018-07-01', '2020-06-30', '610001')
     c.run()
