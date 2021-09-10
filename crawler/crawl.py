@@ -1,6 +1,7 @@
 import re
-import time
 import requests
+import glob
+from datetime import date, timedelta
 import pandas as pd
 
 
@@ -94,9 +95,31 @@ class CCGPCrawler:
         return notice
 
     def run(self):
+        print(f'start date: {self._start_date}, end date: {self._end_date}')
         notices = self._fetch_pages()
         df = pd.DataFrame(data=notices, columns=['标题', '供应商', '供应商地址', '联系人', '联系方式', '中标链接'])
         df.to_excel(f'{self._start_date}_{self._end_date}_{self._region_id}.xlsx', index=False, encoding='utf-8')
+
+
+def grid_crawl(start_date, end_date, region_id):
+    _start_date = date(*[int(i) for i in start_date.split('-')])
+    _end_date = date(*[int(i) for i in end_date.split('-')])
+
+    while 1:
+        tmp_end_date = _start_date + timedelta(days=30)
+        if tmp_end_date <= _end_date:
+            CCGPCrawler(str(_start_date), str(tmp_end_date), region_id).run()
+            _start_date = tmp_end_date
+        else:
+            CCGPCrawler(str(_start_date), str(end_date), region_id).run()
+            break
+
+
+def concat_excels():
+    files = glob.glob('*.xlsx')
+    dfs = [pd.read_excel(file) for file in files]
+    all_df = pd.concat(dfs, ignore_index=True)
+    all_df.to_excel('中标信息.xlsx', index=False, encoding='utf-8')
 
 
 if __name__ == '__main__':
@@ -104,20 +127,5 @@ if __name__ == '__main__':
     end_date = '2020-07-01'
     region_id = '610001'
 
-    from datetime import date, timedelta
-
-    _start_date = date(*[int(i) for i in start_date.split('-')])
-    _end_date = date(*[int(i) for i in end_date.split('-')])
-
-    while 1:
-        tmp_end_date = _start_date + timedelta(days=30)
-        if tmp_end_date <= _end_date:
-            print(f'start date: {_start_date}, end date: {tmp_end_date}')
-            c = CCGPCrawler(str(_start_date), str(tmp_end_date), region_id)
-            c.run()
-            _start_date = tmp_end_date
-        else:
-            print(f'start date: {_start_date}, end date: {end_date}')
-            c = CCGPCrawler(str(_start_date), str(end_date), region_id)
-            c.run()
-            break
+    grid_crawl(start_date, end_date, region_id)
+    concat_excels()
