@@ -17,10 +17,11 @@ class CCGPCrawler:
 
     URL_REX = re.compile(f'href="(.*?)" target="_blank"')
     NOTICE_HEADER_REX = re.compile('<h1 class="content-tit">(.*?)</h1>')
-    SUPPLIER_REX = re.compile('成交供应商 ：(.*?) </p>')
-    ADDRESS_REX = re.compile('地址 ：(.*?) </p>')
-    CONTACTS_REX = re.compile('联系人 ：(.*?) </p>')
-    TEL_REX = re.compile('联系电话 ：(.*?) </p>')
+    # TODO: 中标单位
+    SUPPLIER_REX = re.compile('供应商(.*?)</p>')
+    ADDRESS_REX = re.compile('地址(.*?)</p>')
+    CONTACTS_REX = re.compile('联系人(.*?)</p>')
+    TEL_REX = re.compile('联系电话(.*?)</p>')
 
     def __init__(self, start_date, end_date, region_id):
         self._session = None
@@ -89,15 +90,34 @@ class CCGPCrawler:
         """解析详细的中标信息"""
         notice = []
         for ptn in (self.NOTICE_HEADER_REX, self.SUPPLIER_REX, self.ADDRESS_REX, self.CONTACTS_REX, self.TEL_REX):
-            notice.append('\n'.join(ptn.findall(resp.text)).strip())
+            notice.append('\n'.join(ptn.findall(resp.text)).strip().strip('：').strip(':').strip())
         return notice
 
     def run(self):
         notices = self._fetch_pages()
         df = pd.DataFrame(data=notices, columns=['标题', '供应商', '供应商地址', '联系人', '联系方式', '中标链接'])
-        df.to_excel('中标信息.xlsx', index=False, encoding='utf-8')
+        df.to_excel(f'{self._start_date}_{self._end_date}_{self._region_id}.xlsx', index=False, encoding='utf-8')
 
 
 if __name__ == '__main__':
-    c = CCGPCrawler('2018-07-01', '2020-06-30', '610001')
-    c.run()
+    start_date = '2018-07-01'
+    end_date = '2020-07-01'
+    region_id = '610001'
+
+    from datetime import date, timedelta
+
+    _start_date = date(*[int(i) for i in start_date.split('-')])
+    _end_date = date(*[int(i) for i in end_date.split('-')])
+
+    while 1:
+        tmp_end_date = _start_date + timedelta(days=30)
+        if tmp_end_date <= _end_date:
+            print(f'start date: {_start_date}, end date: {tmp_end_date}')
+            c = CCGPCrawler(str(_start_date), str(tmp_end_date), region_id)
+            c.run()
+            _start_date = tmp_end_date
+        else:
+            print(f'start date: {_start_date}, end date: {end_date}')
+            c = CCGPCrawler(str(_start_date), str(end_date), region_id)
+            c.run()
+            break
