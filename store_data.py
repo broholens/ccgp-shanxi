@@ -33,13 +33,14 @@ class CCGPStore:
     def store(self):
         max_page_num = self.crawler._get_notice_pages()
         for page_num in range(1, max_page_num+1):
+            print(f'left {max_page_num-page_num}')
             one_notice_page_resp = self.crawler._fetch_one_page_notice(page_num)
             self.crawler._parse_notice_url(one_notice_page_resp)
         for index, url in enumerate(self.crawler._notice_urls):
             print(f'left: {len(self.crawler._notice_urls) - index}; storing {url}')
             content = self.crawler.session.get(url).text
             notice_id = url.split('noticeguid=')[-1]
-            self._cur.execute(f'insert into ccgp values ({self.crawler._region_id}, {notice_id}, {content})')
+            self._cur.execute(f'insert into ccgp(region_id, notice_id, content) values ({self.crawler._region_id}, {notice_id}, {content})')
             self._conn.commit()
 
 
