@@ -89,9 +89,15 @@ class CCGPCrawler:
 
     def _parse_notice_detail(self, resp):
         """解析详细的中标信息"""
-        notice = []
-        for ptn in (self.NOTICE_HEADER_REX, self.SUPPLIER_REX, self.ADDRESS_REX, self.CONTACTS_REX, self.TEL_REX):
-            notice.append('\n'.join(ptn.findall(resp.text)).strip().strip('：').strip(':').strip())
+        # TODO: 当前仅解析一个中标单位， 可能存在多个中标单位的情况
+        notice_content = resp.text.replace('中标单位', '供应商')
+        notice_title = self.NOTICE_HEADER_REX.findall(notice_content)[0]
+        supplier = '\n'.join(self.SUPPLIER_REX.findall(notice_content)).strip().strip('：').strip(':').strip()
+        # 默认其他信息在供应商信息之后
+        notice_content = notice_content.split(supplier, 1)[-1]
+        notice = [notice_title, supplier]
+        for ptn in (self.ADDRESS_REX, self.CONTACTS_REX, self.TEL_REX):
+            notice.append('\n'.join(ptn.findall(notice_content)).strip().strip('：').strip(':').strip())
         return notice
 
     def run(self):
@@ -123,7 +129,7 @@ def concat_excels():
 
 
 if __name__ == '__main__':
-    start_date = '2018-07-01'
+    start_date = '2010-07-01'
     end_date = '2020-07-01'
     region_id = '610001'
 
