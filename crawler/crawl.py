@@ -68,12 +68,12 @@ class CCGPCrawler:
     def _fetch_pages(self):
         notices = []
         max_page_num = self._get_notice_pages()
-        for page_num in range(1, max_page_num+1):
+        for page_num in range(1, max_page_num + 1):
             one_notice_page_resp = self._fetch_one_page_notice(page_num)
             self._parse_notice_url(one_notice_page_resp)
         print(f'find notices: {len(self._notice_urls)}')
         for index, notice_url in enumerate(self._notice_urls):
-            print(f'left: {len(self._notice_urls)-index}; parsing {notice_url}')
+            print(f'left: {len(self._notice_urls) - index}; parsing {notice_url}')
             notice_detail_resp = self.session.get(notice_url)
             # time.sleep(.3)
             notice_detail = self._parse_notice_detail(notice_detail_resp)
@@ -106,6 +106,40 @@ class CCGPCrawler:
         df = pd.DataFrame(data=notices, columns=['标题', '供应商', '供应商地址', '联系人', '联系方式', '中标链接'])
         df.to_excel(f'{self._start_date}_{self._end_date}_{self._region_id}.xlsx', index=False, encoding='utf-8')
 
+    def get_suppliers(self):
+        base_url = 'http://www.ccgp-shaanxi.gov.cn//supplier/supplierList.do'
+        supplier_ptn = re.compile('<td align="center">(.*?)</td>')
+
+        def _parse_suppliers(ptn, text):
+            found = list(ptn.findall(text))
+            suppliers_count = len(found) // 5
+            suppliers = [[] for _ in range(suppliers_count)]
+            for index, item in enumerate(found):
+                suppliers[index // 5].append(item)
+            return suppliers
+
+        def _get_suppliers(supplier_type):
+            if supplier_type == '公示中':
+                supplier_state = 9
+                page_num_key = 'page.pageNum',
+                total_page = 42
+            else:
+                supplier_state = 10
+                page_num_key = 'grid.page.pageNum',
+                total_page = 6576
+            all_suppliers = []
+            for i in range(1, total_page):
+                print(f'{supplier_type} process page: {i}')
+                resp = self.session.post(base_url, data={"parameters['supplierstate']": supplier_state, page_num_key: i})
+                suppliers = _parse_suppliers(supplier_ptn, resp.text)
+                all_suppliers.extend(suppliers)
+            df = pd.DataFrame(data=all_suppliers, columns=['序号', '供应商名称', '地址', '联系人', '联系方式'])
+            df.drop(columns=['序号'], axis=1, inplace=True)
+            df.to_excel(f'{supplier_type}供应商.xlsx', index=False, encoding='utf-8')
+
+        for supplier_type in ('公示中', '在册'):
+            _get_suppliers(supplier_type)
+
 
 def grid_crawl(start_date, end_date, region_id):
     _start_date = date(*[int(i) for i in start_date.split('-')])
@@ -129,9 +163,11 @@ def concat_excels():
 
 
 if __name__ == '__main__':
-    start_date = '2010-07-01'
-    end_date = '2020-07-01'
-    region_id = '610001'
-
-    grid_crawl(start_date, end_date, region_id)
-    concat_excels()
+    # start_date = '2010-07-01'
+    # end_date = '2020-07-01'
+    # region_id = '610001'
+    #
+    # grid_crawl(start_date, end_date, region_id)
+    # concat_excels()
+    c = CCGPCrawler('', '', '')
+    c.get_suppliers()
