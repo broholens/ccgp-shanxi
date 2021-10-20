@@ -1,4 +1,6 @@
-requests
-pandas
+requests~=2.26.0
+pandas~=1.3.2
 openpyxl
 selenium
+pdfplumber~=0.5.28
+pyfunctions~=2020.6.17.13.47.45
