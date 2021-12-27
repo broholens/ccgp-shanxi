@@ -1,11 +1,10 @@
 import time
 import sqlite3
 import traceback
-from queue import Queue
 from functools import wraps
 from threading import Lock, Thread
 
-import requests
+import grequests
 import pandas as pd
 from pyfunctions import fun
 from selenium.webdriver.common.keys import Keys
@@ -133,7 +132,7 @@ class GuangDong:
     @sqlite_conn_provider
     def create_table(self, conn=None, cursor=None):
         with self.db_lock:
-            cursor.execute(f'CREATE TABLE {self.db_name} (url varchar(256), visited int default 0, company varchar(256), person varchar(16), tel varchar(128), code varchar(256))')
+            cursor.execute(f'CREATE TABLE IF NOT EXISTS {self.db_name} (url varchar(256), visited int default 0, company varchar(256), person varchar(16), tel varchar(128), code varchar(256))')
             conn.commit()
 
     @sqlite_conn_provider
@@ -145,8 +144,8 @@ class GuangDong:
         driver.find_element_by_id('Inquire').click()
         time.sleep(4)
 
-        total_pages = 13594
-        for i in range(2, total_pages):
+        total_pages = 13600
+        for i in range(1, total_pages):
             print(f'{i}/{total_pages}')
             try:
                 data = self._generate_init_data(driver)
@@ -160,7 +159,7 @@ class GuangDong:
 
             page_nu = driver.find_element_by_xpath('//input[@type="number"]')
             page_nu.clear()
-            page_nu.send_keys(i)
+            page_nu.send_keys(i+1)
             page_nu.send_keys(Keys.ENTER)
             time.sleep(4)
 
@@ -178,29 +177,31 @@ class GuangDong:
         while 1:
             with self.db_lock:
                 cursor.execute(f'select url from {self.db_name} where visited != 1 limit {batch_size}')
-                urls = cursor.fetchall()
+                urls = [url[0] for url in cursor.fetchall()]
 
             if not urls:
                 time.sleep(5)
                 continue
 
-            for url in urls:
-                url = url[0]
+            reqs = [grequests.get(f'https://gdgpo.czt.gd.gov.cn/gateway/gpbs-supplier/rest/v1/supplier/supplierinfo/info/supplierinfo/{url}') for url in urls]
+
+            update_data = []
+
+            for resp, url in zip(grequests.map(reqs), urls):
                 try:
-                    resp = requests.get(f'https://gdgpo.czt.gd.gov.cn/gateway/gpbs-supplier/rest/v1/supplier/supplierinfo/info/supplierinfo/{url}')
                     data = resp.json()['data']['supplierInfo']
                     company, person = data['supplyCn'] or data['supplyCnnick'], data['personName'] or data['legalPerson']
                     tel, code = data['supplyTel'], data['createUserId']
+                    update_data.append((company, person, tel, code, url))
                 except Exception:
                     print(f'parse failed {traceback.format_exc()}')
                     continue
 
-                with self.db_lock:
-                    cursor.execute(f"update {self.db_name} "
-                                   f"set visited=0, company='{company}', person='{person}', tel='{tel}', code='{code}' "
-                                   f"where url='{url}'")
-                    conn.commit()
-                print(url)
+            with self.db_lock:
+                sql = f"update {self.db_name} set visited=1, company=?, person=?, tel=?, code=? where url=?"
+                cursor.executemany(sql, update_data)
+                conn.commit()
+            print(urls)
 
     @sqlite_conn_provider
     def check_data(self, conn=None, cursor=None):  # TODO: close conn
