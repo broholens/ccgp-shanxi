@@ -1,13 +1,11 @@
-import time
 import sqlite3
-import traceback
-from functools import wraps
-from threading import Lock, Thread
+from math import ceil
 
 import grequests
+import requests
+import urllib3
 import pandas as pd
 from pyfunctions import fun
-from selenium.webdriver.common.keys import Keys
 
 ###########
 ### 河南 ###
@@ -114,121 +112,63 @@ from selenium.webdriver.common.keys import Keys
 #     def close(self):
 #         self.execute('--close--')
 
-
-def sqlite_conn_provider(func):
-    @wraps(func)
-    def wrapper(*args, **kwargs):
-        kwargs['conn'] = sqlite3.connect('zb.db')
-        kwargs['cursor'] = kwargs['conn'].cursor()
-        return func(*args, **kwargs)
-    return wrapper
+urllib3.disable_warnings()
 
 
 class GuangDong:
     def __init__(self):
-        self.db_lock = Lock()
         self.db_name = 'guangdong'
+        self.conn = sqlite3.connect('zb.db')
+        self.cursor = self.conn.cursor()
+        self.base_url = 'https://gdgpo.czt.gd.gov.cn/gateway/gpbs-supplier/rest/v1/supplier/supplierinfo/shortlisted/'
+        self.items_per_page = 100
 
-    @sqlite_conn_provider
-    def create_table(self, conn=None, cursor=None):
-        with self.db_lock:
-            cursor.execute(f'CREATE TABLE IF NOT EXISTS {self.db_name} (url varchar(256), visited int default 0, company varchar(256), person varchar(16), tel varchar(128), code varchar(256))')
-            conn.commit()
-
-    @sqlite_conn_provider
-    def get_urls(self, conn=None, cursor=None):
-        """获取招标页面的URL"""
-        driver = fun.make_driver()
-        driver.get('https://gdgpo.czt.gd.gov.cn/cms-gd/site/guangdong/gysml/index.html')
-        time.sleep(1)
-        driver.find_element_by_id('Inquire').click()
-        time.sleep(4)
-
-        total_pages = 13600
-        for i in range(1, total_pages):
-            print(f'{i}/{total_pages}')
-            try:
-                data = self._generate_init_data(driver)
-            except Exception:
-                print(f'{i} failed, {traceback.format_exc()}')
-                continue
-
-            with self.db_lock:
-                cursor.executemany('insert into guangdong(url) values (?)', data)
-                conn.commit()
-
-            page_nu = driver.find_element_by_xpath('//input[@type="number"]')
-            page_nu.clear()
-            page_nu.send_keys(i+1)
-            page_nu.send_keys(Keys.ENTER)
-            time.sleep(4)
+    def create_table(self):
+        self.cursor.execute(f'CREATE TABLE IF NOT EXISTS {self.db_name} (url varchar(256), company varchar(256), person varchar(16), tel varchar(128), code varchar(256))')
+        self.conn.commit()
 
     @staticmethod
-    def _generate_init_data(driver):
-        """返回解析完URL后插入数据库中的数据"""
-        data = []
-        for a in driver.find_elements_by_xpath('//ul[@id="agencyList"]//a'):
-            _id = a.get_attribute('href').split('id=')[-1]
-            data.append((_id,))
-        return data
+    def _request(url):
+        return requests.post(url, timeout=10, verify=False, json={}).json()['data']
 
-    @sqlite_conn_provider
-    def get_data(self, batch_size=10, conn=None, cursor=None):
-        while 1:
-            with self.db_lock:
-                cursor.execute(f'select url from {self.db_name} where visited != 1 limit {batch_size}')
-                urls = [url[0] for url in cursor.fetchall()]
+    @staticmethod
+    def _grequest(urls):
+        items = []
+        reqs = [grequests.post(url, timeout=30, verify=False, json={}) for url in urls]
+        for resp in grequests.map(reqs):
+            items.extend(resp.json()['data']['list'])
+        return items
 
-            if not urls:
-                time.sleep(5)
-                continue
+    def get_data(self):
+        # 总记录数
+        total_count = int(self._request(f'{self.base_url}1/1')['total'])
+        print(f'总数据量：{total_count}')
+        # 分页查询
+        pages = ceil(total_count / self.items_per_page)
 
-            reqs = [grequests.get(f'https://gdgpo.czt.gd.gov.cn/gateway/gpbs-supplier/rest/v1/supplier/supplierinfo/info/supplierinfo/{url}') for url in urls]
+        batch_urls = []
+        update_data = []
+        for i in range(1, pages+1):
+            if i % 10 == 0:  # 每10个URL请求一次
+                self._get_data(batch_urls, update_data)
+                batch_urls, update_data = [], []
+            else:
+                batch_urls.append(f'{self.base_url}{i}/{self.items_per_page}')
+        self._get_data(batch_urls, update_data)
 
-            update_data = []
-
-            for resp, url in zip(grequests.map(reqs), urls):
-                try:
-                    data = resp.json()['data']['supplierInfo']
-                    company, person = data['supplyCn'] or data['supplyCnnick'], data['personName'] or data['legalPerson']
-                    tel, code = data['supplyTel'], data['createUserId']
-                    update_data.append((company, person, tel, code, url))
-                except Exception:
-                    print(f'parse failed {traceback.format_exc()}')
-                    continue
-
-            with self.db_lock:
-                sql = f"update {self.db_name} set visited=1, company=?, person=?, tel=?, code=? where url=?"
-                cursor.executemany(sql, update_data)
-                conn.commit()
-            print(urls)
-
-    @sqlite_conn_provider
-    def check_data(self, conn=None, cursor=None):  # TODO: close conn
-        while 1:
-            with self.db_lock:
-                cursor.execute(f'select count(*) from {self.db_name} where visited != 1')
-                print(f'data to fetch: {cursor.fetchone()}')
-            time.sleep(30)
+    def _get_data(self, batch_urls, update_data):
+        for item in self._grequest(urls=batch_urls):
+            url, code, company = item['id'], item['orgCode'], item['supplyCn'] or item['supplyCnnick']
+            tel, person = item['supplyTel'], item['personName'] or item['legalPerson']
+            update_data.append((url, company, person, tel, code))
+        sql = f"insert into {self.db_name} values (?,?,?,?,?)"
+        self.cursor.executemany(sql, update_data)
+        self.conn.commit()
+        print(batch_urls)
 
 
 if __name__ == '__main__':
     gd = GuangDong()
     gd.create_table()
-
-    t_get_urls = Thread(target=gd.get_urls)
-    t_get_urls.setDaemon(True)
-    t_get_urls.start()
-
-    t_get_data = Thread(target=gd.get_data)
-    t_get_data.setDaemon(True)
-    t_get_data.start()
-
-    t_check_data = Thread(target=gd.check_data)
-    t_check_data.setDaemon(True)
-    t_check_data.start()
-
-    t_get_urls.join()
-    t_get_data.join()
-    t_check_data.join()
+    gd.get_data()
 
